@@ -464,9 +464,15 @@ pub fn group_flag(
 pub fn execute(glint: Glint(a), args: List(String)) -> Result(Out(a), String) {
   // create help flag to check for
   let help_flag = flag_prefix <> help.help_flag.meta.name
+  let help_short_flag = case help.help_flag.short {
+    Some(short) -> Some(flag_short_prefix <> short)
+    None -> None
+  }
 
   // check if help flag is present
-  let #(help, args) = case list.partition(args, fn(s) { s == help_flag }) {
+  let #(help, args) = case
+    list.partition(args, fn(s) { s == help_flag || Some(s) == help_short_flag })
+  {
     // help flag not in args
     #([], args) -> #(False, args)
     // help flag in args
