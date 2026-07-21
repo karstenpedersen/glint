@@ -426,7 +426,11 @@ pub fn flag(
   with f: fn(fn(Flags) -> snag.Result(a)) -> Command(b),
 ) -> Command(b) {
   let cmd = f(flag.getter(_, flag.name))
-  Command(..cmd, flags: insert(cmd.flags, flag.name, build_flag(flag)))
+  Command(
+    ..cmd,
+    flags: insert(cmd.flags, flag.name, build_flag(flag))
+      |> register_shorthand(flag.short, flag.name),
+  )
 }
 
 /// Add a flag for a group of commands.
@@ -440,7 +444,8 @@ pub fn group_flag(
   use node <- update_at(in: glint, at: path)
   CommandNode(
     ..node,
-    group_flags: insert(node.group_flags, flag.name, build_flag(flag)),
+    group_flags: insert(node.group_flags, flag.name, build_flag(flag))
+      |> register_shorthand(flag.short, flag.name),
   )
 }
 
@@ -469,7 +474,11 @@ pub fn execute(glint: Glint(a), args: List(String)) -> Result(Out(a), String) {
   }
 
   // split flags out from the args list
-  let #(flags, args) = list.partition(args, string.starts_with(_, flag_prefix))
+  let #(flags, args) =
+    list.partition(args, fn(s) {
+      string.starts_with(s, flag_prefix)
+      || string.starts_with(s, flag_short_prefix)
+    })
 
   // search for command and execute
   do_execute(glint.cmd, glint.config, args, flags, help, [])
@@ -760,6 +769,9 @@ const flag_prefix = "--"
 /// The separation character for flag names and their values
 const flag_delimiter = "="
 
+/// Short flags must start with this prefix
+const flag_short_prefix = "-"
+
 /// Supported flag types.
 ///
 type Value {
@@ -808,6 +820,7 @@ type Value {
 pub opaque type Flag(a) {
   Flag(
     name: String,
+    short: Option(String),
     desc: String,
     parser: Parser(a, Snag),
     value: fn(FlagInternals(a)) -> Value,
@@ -901,6 +914,7 @@ fn new_builder(
 ) -> Flag(a) {
   Flag(
     name: name,
+    short: None,
     desc: "",
     parser: p,
     value: valuer,
@@ -1010,18 +1024,49 @@ pub fn flag_default(for flag: Flag(a), of default: a) -> Flag(a) {
   Flag(..flag, default: Some(default))
 }
 
+/// Set the shorthand for a flag.
+///
+/// ### Example:
+///
+/// ```gleam
+/// glint.int_flag("awesome_flag")
+/// |> glint.flag_short("a")
+/// ```
+///
+pub fn flag_short(for flag: Flag(a), of short: String) -> Flag(a) {
+  Flag(..flag, short: Some(short))
+}
+
 /// Flags passed as input to a command.
 ///
 pub opaque type Flags {
-  Flags(internal: dict.Dict(String, FlagEntry))
+  Flags(
+    internal: dict.Dict(String, FlagEntry),
+    shorthands: dict.Dict(String, String),
+  )
 }
 
 fn insert(in flags: Flags, at name: String, insert flag: FlagEntry) -> Flags {
-  Flags(dict.insert(flags.internal, name, flag))
+  Flags(..flags, internal: dict.insert(flags.internal, name, flag))
+}
+
+fn register_shorthand(
+  in flags: Flags,
+  at name: Option(String),
+  insert flag_name: String,
+) -> Flags {
+  case name {
+    Some(name) ->
+      Flags(..flags, shorthands: dict.insert(flags.shorthands, name, flag_name))
+    None -> flags
+  }
 }
 
 fn merge(into a: Flags, from b: Flags) -> Flags {
-  Flags(internal: dict.merge(a.internal, b.internal))
+  Flags(
+    internal: dict.merge(a.internal, b.internal),
+    shorthands: dict.merge(a.shorthands, b.shorthands),
+  )
 }
 
 fn fold(flags: Flags, acc: acc, f: fn(acc, String, FlagEntry) -> acc) -> acc {
@@ -1029,22 +1074,58 @@ fn fold(flags: Flags, acc: acc, f: fn(acc, String, FlagEntry) -> acc) -> acc {
 }
 
 fn new_flags() -> Flags {
-  Flags(dict.new())
+  Flags(dict.new(), dict.new())
 }
 
 /// Updates a flag value, ensuring that the new value can satisfy the required type.
-/// Assumes that all flag inputs passed in start with --
+/// Assumes that all flag inputs passed in start with -- or -
 /// This function is only intended to be used from glint.execute_root
 ///
 fn update_flags(
   in flags: Flags,
   with flag_input: String,
 ) -> snag.Result(Flags) {
-  let flag_input = string.drop_start(flag_input, string.length(flag_prefix))
+  case string.starts_with(flag_input, flag_prefix) {
+    True ->
+      string.drop_start(flag_input, string.length(flag_prefix))
+      |> update_flags_with_long(flags, _)
+    False ->
+      string.drop_start(flag_input, string.length(flag_short_prefix))
+      |> update_flags_with_short(flags, _)
+  }
+}
 
+/// Updates a long flag value, ensuring that the new value can satisfy the required type.
+/// Assumes that all flag inputs passed in start with --
+/// This function is only intended to be used from glint.execute_root
+///
+fn update_flags_with_long(
+  in flags: Flags,
+  with flag_input: String,
+) -> snag.Result(Flags) {
   case string.split_once(flag_input, flag_delimiter) {
     Ok(data) -> update_flag_value(flags, data)
     Error(_) -> attempt_toggle_flag(flags, flag_input)
+  }
+}
+
+/// Updates a flag value based on short flag, ensuring that the new value can satisfy the required type.
+/// Assumes that all flag inputs passed in start with -
+/// This function is only intended to be used from glint.execute_root
+///
+fn update_flags_with_short(
+  in flags: Flags,
+  with flag_input: String,
+) -> snag.Result(Flags) {
+  case string.split_once(flag_input, flag_delimiter) {
+    Ok(#(short, input)) -> {
+      use flag <- result.try(get_flag_from_short(flags, short))
+      update_flag_value(flags, #(flag, input))
+    }
+    Error(_) -> {
+      use flag <- result.try(get_flag_from_short(flags, flag_input))
+      attempt_toggle_flag(flags, flag)
+    }
   }
 }
 
@@ -1069,17 +1150,26 @@ fn attempt_toggle_flag(in flags: Flags, at key: String) -> snag.Result(Flags) {
       |> B
       |> fn(val) { FlagEntry(..contents, value: val) }
       |> dict.insert(into: flags.internal, for: key)
-      |> Flags
+      |> fn(internal) { Flags(..flags, internal: internal) }
       |> Ok
     B(FlagInternals(Some(val), ..) as internal) ->
       FlagInternals(..internal, value: Some(!val))
       |> B
       |> fn(val) { FlagEntry(..contents, value: val) }
       |> dict.insert(into: flags.internal, for: key)
-      |> Flags
+      |> fn(internal) { Flags(..flags, internal: internal) }
       |> Ok
     _ -> Error(no_value_flag_err(key))
   }
+}
+
+fn get_flag_from_short(
+  in flags: Flags,
+  short short: String,
+) -> snag.Result(String) {
+  flags.shorthands
+  |> dict.get(short)
+  |> result.replace_error(undefined_flag_short_err(short))
 }
 
 fn access_type_error(flag_type) {
@@ -1133,6 +1223,12 @@ fn undefined_flag_err(key: String) -> Snag {
   "flag provided but not defined"
   |> snag.new()
   |> layer_invalid_flag(key)
+}
+
+fn undefined_flag_short_err(short: String) -> Snag {
+  "short flag provided but not defined"
+  |> snag.new()
+  |> layer_invalid_flag(short)
 }
 
 fn cannot_parse(with value: String, is kind: String) -> Snag {
