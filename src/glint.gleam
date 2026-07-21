@@ -1050,6 +1050,17 @@ fn insert(in flags: Flags, at name: String, insert flag: FlagEntry) -> Flags {
   Flags(..flags, internal: dict.insert(flags.internal, name, flag))
 }
 
+fn merge(into a: Flags, from b: Flags) -> Flags {
+  Flags(
+    internal: dict.merge(a.internal, b.internal),
+    shorthands: dict.merge(a.shorthands, b.shorthands),
+  )
+}
+
+fn fold(flags: Flags, acc: acc, f: fn(acc, String, FlagEntry) -> acc) -> acc {
+  dict.fold(flags.internal, acc, f)
+}
+
 fn register_shorthand(
   in flags: Flags,
   at name: Option(String),
@@ -1060,17 +1071,6 @@ fn register_shorthand(
       Flags(..flags, shorthands: dict.insert(flags.shorthands, name, flag_name))
     None -> flags
   }
-}
-
-fn merge(into a: Flags, from b: Flags) -> Flags {
-  Flags(
-    internal: dict.merge(a.internal, b.internal),
-    shorthands: dict.merge(a.shorthands, b.shorthands),
-  )
-}
-
-fn fold(flags: Flags, acc: acc, f: fn(acc, String, FlagEntry) -> acc) -> acc {
-  dict.fold(flags.internal, acc, f)
 }
 
 fn new_flags() -> Flags {
@@ -1088,10 +1088,10 @@ fn update_flags(
   case string.starts_with(flag_input, flag_prefix) {
     True ->
       string.drop_start(flag_input, string.length(flag_prefix))
-      |> update_flags_with_long(flags, _)
+      |> update_flag_from_long(flags, _)
     False ->
       string.drop_start(flag_input, string.length(flag_short_prefix))
-      |> update_flags_with_short(flags, _)
+      |> update_flag_from_short(flags, _)
   }
 }
 
@@ -1099,7 +1099,7 @@ fn update_flags(
 /// Assumes that all flag inputs passed in start with --
 /// This function is only intended to be used from glint.execute_root
 ///
-fn update_flags_with_long(
+fn update_flag_from_long(
   in flags: Flags,
   with flag_input: String,
 ) -> snag.Result(Flags) {
@@ -1113,18 +1113,18 @@ fn update_flags_with_long(
 /// Assumes that all flag inputs passed in start with -
 /// This function is only intended to be used from glint.execute_root
 ///
-fn update_flags_with_short(
+fn update_flag_from_short(
   in flags: Flags,
   with flag_input: String,
 ) -> snag.Result(Flags) {
   case string.split_once(flag_input, flag_delimiter) {
     Ok(#(short, input)) -> {
-      use flag <- result.try(get_flag_from_short(flags, short))
-      update_flag_value(flags, #(flag, input))
+      use key <- result.try(get_flag_key_from_short(flags, short))
+      update_flag_value(flags, #(key, input))
     }
     Error(_) -> {
-      use flag <- result.try(get_flag_from_short(flags, flag_input))
-      attempt_toggle_flag(flags, flag)
+      use key <- result.try(get_flag_key_from_short(flags, flag_input))
+      attempt_toggle_flag(flags, key)
     }
   }
 }
@@ -1163,13 +1163,13 @@ fn attempt_toggle_flag(in flags: Flags, at key: String) -> snag.Result(Flags) {
   }
 }
 
-fn get_flag_from_short(
+fn get_flag_key_from_short(
   in flags: Flags,
   short short: String,
 ) -> snag.Result(String) {
   flags.shorthands
   |> dict.get(short)
-  |> result.replace_error(undefined_flag_short_err(short))
+  |> result.replace_error(undefined_short_flag_err(short))
 }
 
 fn access_type_error(flag_type) {
@@ -1225,7 +1225,7 @@ fn undefined_flag_err(key: String) -> Snag {
   |> layer_invalid_flag(key)
 }
 
-fn undefined_flag_short_err(short: String) -> Snag {
+fn undefined_short_flag_err(short: String) -> Snag {
   "short flag provided but not defined"
   |> snag.new()
   |> layer_invalid_flag(short)
