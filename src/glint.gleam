@@ -690,6 +690,7 @@ fn build_help_config(config: Config) -> help.Config {
     min_first_column_width: config.min_first_column_width,
     column_gap: config.column_gap,
     flag_prefix: flag_prefix,
+    flag_short_prefix: flag_short_prefix,
     flag_delimiter: flag_delimiter,
   )
 }
@@ -745,6 +746,7 @@ fn build_flags_help(flags: Flags) -> List(help.Flag) {
   [
     help.Flag(
       meta: help.Metadata(name: name, description: flag.description),
+      short: find_short_from_flag_key(flags, name),
       type_: flag_type_info(flag),
     ),
     ..acc
@@ -1175,6 +1177,15 @@ fn get_flag_key_from_short(
   flags.shorthands
   |> dict.get(short)
   |> result.replace_error(undefined_short_flag_err(short))
+}
+
+fn find_short_from_flag_key(in flags: Flags, for name: String) {
+  dict.fold(flags.shorthands, None, fn(acc, short, long) {
+    case long == name {
+      True -> Some(short)
+      False -> acc
+    }
+  })
 }
 
 fn access_type_error(flag_type) {
