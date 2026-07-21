@@ -1026,6 +1026,8 @@ pub fn flag_default(for flag: Flag(a), of default: a) -> Flag(a) {
 
 /// Set the shorthand for a flag.
 ///
+/// If `short` is not exactly one character, no shorthand is set.
+///
 /// ### Example:
 ///
 /// ```gleam
@@ -1034,7 +1036,10 @@ pub fn flag_default(for flag: Flag(a), of default: a) -> Flag(a) {
 /// ```
 ///
 pub fn flag_short(for flag: Flag(a), of short: String) -> Flag(a) {
-  Flag(..flag, short: Some(short))
+  case string.length(short) {
+    1 -> Flag(..flag, short: Some(short))
+    _ -> flag
+  }
 }
 
 /// Flags passed as input to a command.

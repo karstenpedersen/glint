@@ -148,6 +148,17 @@ pub fn flag_short_test() {
   |> glint.add([], expect_flag_value_of_10)
   |> glint.execute([flag_input])
   |> should.be_ok()
+
+  // shorthand is not added if its not exactly one character
+  let flags = glint.int_flag("flag") |> glint.flag_short("ff")
+  let flag_input = "-ff=1"
+  glint.new()
+  |> glint.add(
+    [],
+    glint.flag(flags, fn(_flag) { glint.command(fn(_, _, _) { Nil }) }),
+  )
+  |> glint.execute([flag_input])
+  |> should.be_error()
 }
 
 pub fn flag_value_test() {
@@ -433,7 +444,8 @@ pub fn toggle_test() {
   glint.new()
   |> glint.add([], {
     use flag <- glint.flag(
-      glint.bool_flag("flag") |> glint.flag_short("f")
+      glint.bool_flag("flag")
+      |> glint.flag_short("f")
       |> glint.flag_default(True),
     )
     use _, _, flags <- glint.command()
